@@ -1,28 +1,34 @@
 #include <Arduino.h>
+
+#include <esp_now.h>
+
 #include <WiFi.h>
-#include <ESPmDNS.h>
-#include <WiFiUdp.h>
 #include <ArduinoOTA.h>
+#include <ESPmDNS.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+
+#include <Wire.h>
+#include <RTC8564.h>
+
 #include <time.h>
 #include <math.h>
 
 // *********************************WiFi接続先の指定*******************************
 // ############### 池田事務所 ###############
-// String ssid = "Buffalo-G-0320";
-// String pw = "cfn3sw44jxmkv";
-// #########################################
+String ssid = "Buffalo-G-0320";
+String pw = "cfn3sw44jxmkv";
 
 // ############## 6製造ルーター #############
-String ssid = "IKEDA-AP13";
-String pw = "8286andAPad!m";
-// #########################################
+// String ssid = "IKEDA-AP13";
+// String pw = "8286andAPad!m";
 
 // *********************************機器番号の指定*********************************
-String Device_Num = "0085"; // Device0058
+String Device_Num = "0085";
 // *******************************************************************************
 
 // *********************************IPアドレスの指定*********************************
-IPAddress ip(192, 168, 2, 6); // Device0058
+IPAddress ip(192, 168, 2, 5);
 // **********************************************************************************
 
 // *******************************ネットワーク基本設定*******************************
@@ -53,7 +59,65 @@ int redStatues[LP_SIZE];
 int yellowStatues[LP_SIZE];
 int greenStatues[LP_SIZE];
 
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+char data_str[20] = "yyyy/mm/dd hh:mm:ss";
+
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "ntp.nict.jp");
+
+// 日本時間
 #define JST 3600 * 9
+String ntpServer = "ntp.jst.mfeed.ad.jp";
+
+//////////////////////////////////////////////////////
+// ESP-NOW送信
+//////////////////////////////////////////////////////
+void didDataSend(const uint8_t *mac_addr, esp_now_send_status_t status)
+{
+  Serial.print("ESP-NOW Send Status: ");
+  if (status == ESP_NOW_SEND_SUCCESS)
+  {
+    Serial.println("Success");
+  }
+  else
+  {
+    Serial.println("Failed");
+  }
+}
+
+//////////////////////////////////////////////////////
+// ESP-NOW受信
+//////////////////////////////////////////////////////
+void didDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len)
+{
+  Serial.println((char *)incomingData);
+  sendDataToServer(String((char *)incomingData));
+}
+
+void setupESPNow()
+{
+  // ESP-NOW初期化
+  if (esp_now_init() != ESP_OK)
+  {
+    Serial.println("Error: Initialize ESP-NOW");
+    return;
+  }
+
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK)
+  {
+    Serial.println("Failed to add peer");
+    return;
+  }
+
+  esp_now_register_send_cb(didDataSend);
+  esp_now_register_recv_cb(didDataRecv);
+}
 
 /* ----------------------------------------------------
  * 初期化
@@ -61,6 +125,9 @@ int greenStatues[LP_SIZE];
 void setup()
 {
   Serial.begin(115200);
+
+  Wire.begin(21, 22);
+  Rtc.begin();
 
   pinMode(LED_RED_PIN, OUTPUT);
   pinMode(LED_GREEN_PIN, OUTPUT);
@@ -103,6 +170,9 @@ void setup()
   }
   Serial.println("OK");
 
+  // ESP-NOW初期化
+  setupESPNow();
+
   ArduinoOTA.onStart([](){
       String type;
       if (ArduinoOTA.getCommand() == U_FLASH)
@@ -125,6 +195,21 @@ void setup()
       else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
       else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
   ArduinoOTA.begin();
+
+  // NTP設定
+  configTime(JST, 0, ntpServer.c_str());
+
+  struct tm timeInfo;
+  while (!getLocalTime(&timeInfo))
+  {
+    Serial.print(".");
+    delay(100);
+  }
+  Serial.println();
+  Serial.println(&timeInfo, "from ntp: %Y/%m/%d %H:%M:%S"); 
+
+  // RTCに書き込む
+  RTCWrite(&timeInfo);
 
   digitalWrite(LED_GREEN_PIN, HIGH);
 
@@ -188,40 +273,82 @@ void loop()
     Serial.print("status: ");
     Serial.println(status);
 
-    String path = "/scripts/IoT/reception.php?";
-    path = path + "number=" + Device_Num + "&color=" + String(status) + "&year=" + year + "&month=" + month + "&day=" + day + "&hh=" + hh + "&mm=" + mm + "&ss=" + ss;
+    String year, month, day, hh, mm, ss;
 
-    Serial.print("connecting to ");
-    Serial.println(host);
-
-    WiFiClient client;
-    if (!client.connect(host, httpPort))
+    // NTPから時間を取得する
+    if (timeClient.update())
     {
-      // TODO: ESP-NOW
+      unsigned long epochTime = timeClient.getEpochTime();
+      struct tm *ptm = gmtime((time_t *)&epochTime);
 
-      Serial.println("connection failed");
+      year = String(ptm->tm_year + 1900);
+      month = String(ptm->tm_mon + 1);
+      day = String(ptm->tm_mday);
+
+      hh = String(timeClient.getHours());
+      mm = String(timeClient.getMinutes());
+      ss = String(timeClient.getSeconds());
+    }
+    // RTCから取得する
+    else if (Rtc.available())
+    {
+      RTCDateToStr();
+
+      year = String(data_str[0]) + String(data_str[1]) + String(data_str[2]) + String(data_str[3]);
+      month = String(data_str[5]) + String(data_str[6]);
+      day = String(data_str[8]) + String(data_str[9]);
+
+      hh = String(data_str[11]) + String(data_str[12]);
+      mm = String(data_str[14]) + String(data_str[15]);
+      ss = String(data_str[17]) + String(data_str[18]);
+    }
+    else
+    {
+      Serial.println("ERROR: Get Datetime");
       return;
     }
 
-    client.print("GET " + path + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
-    unsigned long timeout = millis();
-    while (client.available() == 0)
-    {
-      if (millis() - timeout > 5000)
-      {
-        Serial.println(">>> Client Timeout !");
-        client.stop();
+    String path = "/scripts/IoT/reception.php?";
+    path = path + "number=" + Device_Num + "&color=" + String(status) + "&year=" + year + "&month=" + month + "&day=" + day + "&hh=" + hh + "&mm=" + mm + "&ss=" + ss;
 
-        // TODO: ESP-NOW
-
-        return;
-      }
-    }
-
-    lastDidSendMillis = millis();
+    sendDataToServer(path);
   }
 
   delay(100);
+}
+
+void sendDataToServer(String path)
+{
+  Serial.print("connecting to ");
+  Serial.println(host);
+
+  WiFiClient client;
+  if (!client.connect(host, httpPort))
+  {
+    Serial.println("connection failed");
+
+    // ESP-NOW
+    esp_now_send(broadcastAddress, (uint8_t *)path.c_str(), path.length());
+    return;
+  }
+
+  client.print("GET " + path + " HTTP/1.1\r\n" + "Host: " + host + "\r\n" + "Connection: close\r\n\r\n");
+  unsigned long timeout = millis();
+  while (client.available() == 0)
+  {
+    if (millis() - timeout > 5000)
+    {
+      Serial.println(">>> Client Timeout !");
+      client.stop();
+
+      // ESP-NOW
+      esp_now_send(broadcastAddress, (uint8_t *)path.c_str(), path.length());
+
+      return;
+    }
+  }
+
+  lastDidSendMillis = millis();
 }
 
 void updateSensors()
