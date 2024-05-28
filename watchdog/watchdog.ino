@@ -15,34 +15,31 @@
 #include <math.h>
 
 // *********************************WiFi接続先の指定*******************************
-// ############### 池田事務所 ###############
-String ssid = "Buffalo-G-0320";
-String pw = "cfn3sw44jxmkv";
+// ############### 本社事務所 ###############
+String ssid = "aterm-cf022d-g";
+String pw = "4d86e2cf7d82e";
 
-// ############## 6製造ルーター #############
-// String ssid = "IKEDA-AP13";
-// String pw = "8286andAPad!m";
+// ############## 7製造現場 #############
+// String ssid = "Antetsu_HQ2nd_Factory";
+// String pw = "0138@ndo#Pwd";
 
 // *********************************機器番号の指定*********************************
-String Device_Num = "0085";
+String Device_Num = "7002";
 // *******************************************************************************
 
 // *********************************IPアドレスの指定*********************************
-IPAddress ip(192, 168, 2, 5);
+IPAddress ip(192, 168, 3, 63);
 // **********************************************************************************
 
 // *******************************ネットワーク基本設定*******************************
-IPAddress gateway(192, 168, 2, 254);
+IPAddress gateway(192, 168, 3, 254);
 IPAddress subnet(255, 255, 255, 0);
-IPAddress dns(192, 168, 2, 254);
+IPAddress dns(192, 168, 3, 254);
 // *********************************************************************************
 
-#define RELAY_RED_PIN 35
-#define RELAY_YELLOW_PIN 32
-#define RELAY_GREEN_PIN 33
-
-#define LED_GREEN_PIN 26
-#define LED_RED_PIN 27
+#define RELAY_RED_PIN 19
+#define RELAY_YELLOW_PIN 18
+#define RELAY_GREEN_PIN 17
 
 // 送信間隔
 #define SEND_DURATION 5000
@@ -129,12 +126,6 @@ void setup()
   Wire.begin(21, 22);
   Rtc.begin();
 
-  pinMode(LED_RED_PIN, OUTPUT);
-  pinMode(LED_GREEN_PIN, OUTPUT);
-
-  digitalWrite(LED_RED_PIN, LOW);
-  digitalWrite(LED_GREEN_PIN, LOW);
-
   pinMode(RELAY_RED_PIN, INPUT);
   pinMode(RELAY_YELLOW_PIN, INPUT);
   pinMode(RELAY_GREEN_PIN, INPUT);
@@ -210,8 +201,6 @@ void setup()
 
   // RTCに書き込む
   RTCWrite(&timeInfo);
-
-  digitalWrite(LED_GREEN_PIN, HIGH);
 
   Serial.println("Boot OK");
 }
